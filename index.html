@@ -184,8 +184,29 @@
         
         .dashboard-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: 1fr 1fr;
+            /* Set fixed rows for predictable heights, which also makes cards inside them have a fixed height */
+            grid-template-rows: 320px 320px;
             gap: 20px;
+            grid-template-areas:
+                "meetings activity"
+                "notes activity";
+        }
+
+        .upcoming-meetings-card { grid-area: meetings; }
+        .important-notes-card { grid-area: notes; }
+        .recent-activity-card { grid-area: activity; }
+
+        @media (max-width: 900px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+                 /* Adjust for single column view */
+                grid-template-rows: 400px 400px auto;
+                grid-template-areas:
+                    "meetings"
+                    "activity"
+                    "notes";
+            }
         }
         
         .card {
@@ -193,10 +214,16 @@
             border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             padding-bottom: 20px; /* Padding for the body, not the header */
-            height: 450px;
+            /* height: 450px; REMOVED - height is now controlled by the grid rows */
             display: flex;
             flex-direction: column;
             overflow: hidden; /* Important for the scrollable content */
+        }
+
+        /* Enforce permanent scrollbar on specific cards */
+        .upcoming-meetings-card .scrollable-content,
+        .recent-activity-card .scrollable-content {
+            overflow-y: scroll;
         }
         
         /* CARD HEADING UPDATE: Blue background, bold white text */
@@ -391,12 +418,12 @@
                     <p>Sales Partner Utility</p>
                 </div>
                 <div class="nav">
-                    <button class="nav-btn active" onclick="showView('dashboard')">Dashboard</button>
-                    <button class="nav-btn" onclick="showView('leads')">Leads</button>
-                    <button class="nav-btn" onclick="showView('calendar')">Calendar</button>
-                    <button class="nav-btn" onclick="showView('activity')">Activity Log</button>
-                    <button class="nav-btn" onclick="showView('data-management')">Data Management</button>
-                    <button class="nav-btn add-lead" onclick="showView('add-lead')">+ Add Lead</button>
+                    <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+                    <button class="nav-btn" data-view="leads">Leads</button>
+                    <button class="nav-btn" data-view="calendar">Calendar</button>
+                    <button class="nav-btn" data-view="activity">Activity Log</button>
+                    <button class="nav-btn" data-view="data-management">Data Management</button>
+                    <button class="nav-btn add-lead" data-view="add-lead">+ Add Lead</button>
                 </div>
             </div>
 
@@ -415,21 +442,14 @@
                 
                 <div class="dashboard-grid">
                     
-                    <div class="card">
+                    <div class="card upcoming-meetings-card">
                         <div class="card-header">Upcoming Meetings</div>
                         <div class="scrollable-content" id="upcoming-meetings">
                             <p style="text-align: center; color: #999; margin-top: 10px;">Loading meetings...</p>
                         </div>
                     </div>
 
-                    <div class="card">
-                        <div class="card-header">Recent Activity</div>
-                        <div class="scrollable-content" id="recent-activity-card">
-                            <p style="text-align: center; color: #999; margin-top: 10px;">Loading activity...</p>
-                        </div>
-                    </div>
-                    
-                    <div class="card">
+                    <div class="card important-notes-card">
                         <div class="card-header">Important Notes</div>
                         <div class="notes-input-area">
                             <textarea id="important-note-input" placeholder="Type and save a general note..."></textarea>
@@ -437,6 +457,13 @@
                         </div>
                         <div class="scrollable-content" id="important-notes-list">
                             <p style="text-align: center; color: #999; margin-top: 10px;">No notes saved.</p>
+                        </div>
+                    </div>
+
+                    <div class="card recent-activity-card">
+                        <div class="card-header">Recent Activity</div>
+                        <div class="scrollable-content" id="recent-activity-card">
+                            <p style="text-align: center; color: #999; margin-top: 10px;">Loading activity...</p>
                         </div>
                     </div>
                 </div>
@@ -1299,8 +1326,20 @@
         function closeModal() { document.getElementById('lead-modal').classList.remove('active'); currentLeadId = null; }
         function closeMeetingModal() { document.getElementById('meeting-modal').classList.remove('active'); }
         
-        // Initialize
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', () => {
+            init();
+
+            // Setup navigation click handler using event delegation
+            const nav = document.querySelector('.nav');
+            if (nav) {
+                nav.addEventListener('click', (event) => {
+                    const button = event.target.closest('.nav-btn');
+                    if (button && button.dataset.view) {
+                        showView(button.dataset.view);
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html>
