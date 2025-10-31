@@ -638,164 +638,523 @@
         let db;
         let currentLeadId = null;
         let currentMonth = new Date();
-        let repName = localStorage.getItem('repName') || 'Not Set';
-        let notifiedMeetings = JSON.parse(localStorage.getItem('notifiedMeetings')) || {};
+        let repName = localStorage.getItem('repName') || 'Unknown Rep';
         
-        function initDB() {
-            console.log("initDB started");
-            const request = indexedDB.open('CRMDB', 5); // Increment version to ensure upgradeNeeded triggers
+        // Initialize
+        function init() {
+            updateRepNameDisplay();
+            setupDragDrop();
+            initDB();
+            document.querySelectorAll('.nav-btn').forEach(button => {
+                button.addEventListener('click', () => {
+                    const viewId = button.getAttribute('data-view');
+                    if (viewId) {
+                        showView(viewId);
+                    }
+                });
+            });
+        }
 
-            request.onerror = (event) => {
-                console.error('Database failed to open:', event.target.errorCode);
-                alert('Database Error: IndexedDB failed to open. Please ensure your browser supports IndexedDB and try refreshing the page.');
-            };
+        function updateRepNameDisplay() {
+            document.getElementById('rep-name-display').textContent = repName;
+        }
+
+        function setRepName() {
+            const name = prompt('Enter sales rep name:', repName);
+            if (name && name.trim()) {
+                repName = name.trim();
+                localStorage.setItem('repName', repName);
+                updateRepNameDisplay();
+                logActivity('Rep name updated', `Name set to: ${repName}`);
+            }
+        }
+
+        function setupDragDrop() {
+            const zone = document.getElementById('import-zone');
+
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                zone.classList.add('dragover');
+            });
+
+            zone.addEventListener('dragleave', () => {
+                zone.classList.remove('dragover');
+            });
             
-            request.onsuccess = (event) => {
-                db = event.target.result;
-                console.log('Database opened successfully!');
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleImportFile(files[0]);
+                }
+            });
+        }
+
+        // Initialize IndexedDB
+        function initDB() {
+            const request = indexedDB.open('CRMDB', 2);
+
+            request.onerror = () => alert('Database failed to open');
+
+            request.onsuccess = () => {
+                db = request.result;
                 loadDashboard();
                 checkReminders();
                 setInterval(checkReminders, 60000); // Check every minute
             };
             
-            request.onupgradeneeded = (event) => {
-                db = event.target.result;
-                console.log('Database upgrade needed from version', event.oldVersion, 'to', event.newVersion);
+            request.onupgradeneeded = (e) => {
+                db = e.target.result;
 
-                // Define store names
-                const storeNames = ['leads', 'notes', 'meetings', 'activity', 'importantNotes'];
+                if (!db.objectStoreNames.contains('leads')) {
+                    const leadsStore = db.createObjectStore('leads', { keyPath: 'id', autoIncrement: true });
+                    leadsStore.createIndex('name', 'name', { unique: false });
+                    leadsStore.createIndex('email', 'email', { unique: false });
+                }
 
-                // Ensure all stores are created if they don't exist
-                storeNames.forEach(storeName => {
-                    if (!db.objectStoreNames.contains(storeName)) {
-                        console.log(`Creating object store: ${storeName}`);
-                        let store;
-                        if (storeName === 'leads') {
-                            store = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                            store.createIndex('name', 'name', { unique: false });
-                            store.createIndex('email', 'email', { unique: false });
-                        } else if (storeName === 'notes') {
-                            store = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                            store.createIndex('leadId', 'leadId', { unique: false });
-                        } else if (storeName === 'meetings') {
-                            store = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                            store.createIndex('date', 'date', { unique: false });
-                            store.createIndex('datetime', 'datetime', { unique: false }); // Index for reminders/sorting
-                        } else if (storeName === 'activity') {
-                            store = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                            store.createIndex('timestamp', 'timestamp', { unique: false });
-                        } else if (storeName === 'importantNotes') {
-                            store = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
-                            store.createIndex('date', 'date', { unique: false });
-                        }
-                    }
-                });
-            };
-        }
+                if (!db.objectStoreNames.contains('notes')) {
+                    const notesStore = db.createObjectStore('notes', { keyPath: 'id', autoIncrement: true });
+                    notesStore.createIndex('leadId', 'leadId', { unique: false });
+                }
 
-        function init() {
-            console.log("DOM fully loaded and parsed");
-            updateRepNameDisplay();
-            initDB(); // This now correctly triggers the database connection
-            setupDragDrop();
-        }
+                if (!db.objectStoreNames.contains('meetings')) {
+                    const meetingsStore = db.createObjectStore('meetings', { keyPath: 'id', autoIncrement: true });
+                    meetingsStore.createIndex('date', 'date', { unique: false });
+                    meetingsStore.createIndex('datetime', 'datetime', { unique: false });
+                }
 
-        // --- IMPORTANT NOTES FUNCTIONS ---
-
-        function saveImportantNote() {
-            if (!db) return alert('Database not initialized!');
-            const noteInput = document.getElementById('important-note-input');
-            const content = noteInput.value.trim();
-            
-            if (!content) {
-                alert('Please enter a note!');
-                return;
-            }
-
-            const note = {
-                content: content,
-                date: new Date().toISOString(),
-                repName: repName
-            };
-
-            const transaction = db.transaction(['importantNotes'], 'readwrite');
-            const store = transaction.objectStore('importantNotes');
-            const request = store.add(note);
-
-            request.onsuccess = () => {
-                noteInput.value = '';
-                logActivity('Important Note Saved', `Saved general note: ${content.substring(0, 50)}...`);
-                loadImportantNotes();
-            };
-            
-            request.onerror = (e) => {
-                console.error('Error saving important note:', e);
-                alert('Error saving important note: ' + e.target.error.message);
-            };
-        }
-
-        function loadImportantNotes() {
-            if (!db) return;
-
-            const transaction = db.transaction(['importantNotes'], 'readonly');
-            const store = transaction.objectStore('importantNotes');
-            const index = store.index('date');
-            const request = index.openCursor(null, 'prev');
-
-            const notes = [];
-            request.onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (cursor) {
-                    notes.push(cursor.value);
-                    cursor.continue();
-                } else {
-                    const notesList = document.getElementById('important-notes-list');
-                    notesList.innerHTML = notes.length ?
-                        notes.map(note => `
-                            <div class="important-note-item">
-                                <div class="note-item-date">${new Date(note.date).toLocaleString()} - ${note.repName}</div>
-                                <div>${note.content}</div>
-                            </div>
-                        `).join('') :
-                        '<p style="text-align: center; color: #999; margin-top: 10px;">No important notes saved.</p>';
+                if (!db.objectStoreNames.contains('activity')) {
+                    const activityStore = db.createObjectStore('activity', { keyPath: 'id', autoIncrement: true });
+                    activityStore.createIndex('timestamp', 'timestamp', { unique: false });
                 }
             };
-
-            request.onerror = (e) => {
-                console.error('Error loading important notes:', e);
-            };
         }
 
-        // --- CORE FUNCTIONALITY ---
-
+        // Activity Logging
         function logActivity(action, details) {
-            if (!db) {
-                console.error('Database not initialized for activity logging!');
-                return;
-            }
             const activity = {
                 action: action,
                 details: details,
                 repName: repName,
                 timestamp: new Date().toISOString()
             };
-            
+
             const transaction = db.transaction(['activity'], 'readwrite');
+            transaction.objectStore('activity').add(activity);
+        }
+
+        function loadActivityLog() {
+            const transaction = db.transaction(['activity'], 'readonly');
             const store = transaction.objectStore('activity');
-            const request = store.add(activity);
+            const index = store.index('timestamp');
+            const request = index.openCursor(null, 'prev');
+
+            const activities = [];
+            request.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor && activities.length < 50) {
+                    activities.push(cursor.value);
+                    cursor.continue();
+                } else {
+                    document.getElementById('activity-list').innerHTML = activities.length ?
+                        activities.map(activity => `
+                            <div class="activity-item">
+                                <div class="activity-time">${new Date(activity.timestamp).toLocaleString()} - ${activity.repName}</div>
+                                <div class="activity-text"><strong>${activity.action}</strong>: ${activity.details}</div>
+                            </div>
+                        `).join('') :
+                        '<p style="text-align: center; color: #666;">No activity yet.</p>';
+                }
+            };
+        }
+
+        // Reminder System
+        function checkReminders() {
+            const transaction = db.transaction(['meetings', 'leads'], 'readonly');
+            const meetingsStore = transaction.objectStore('meetings');
+            const leadsStore = transaction.objectStore('leads');
+            const request = meetingsStore.getAll();
 
             request.onsuccess = () => {
-                // console.log('Activity logged:', activity);
+                const meetings = request.result;
+                const now = new Date();
+
+                meetings.forEach(meeting => {
+                    if (!meeting.reminder || meeting.notified) return;
+
+                    const meetingDateTime = new Date(`${meeting.date}T${meeting.time}`);
+                    const reminderTime = new Date(meetingDateTime.getTime() - meeting.reminder * 60000);
+
+                    if (now >= reminderTime && now < meetingDateTime) {
+                        leadsStore.get(meeting.leadId).onsuccess = (e) => {
+                            const lead = e.target.result;
+                            showNotification(`Meeting with ${meeting.leadName}`,
+                                `In ${meeting.reminder} minutes at ${meeting.time}`);
+
+                            // Mark as notified
+                            meeting.notified = true;
+                            const updateTransaction = db.transaction(['meetings'], 'readwrite');
+                            updateTransaction.objectStore('meetings').put(meeting);
+                        };
+                    }
+                });
             };
+        }
+
+        function showNotification(title, message) {
+            const notification = document.getElementById('notification');
+            document.getElementById('notification-content').innerHTML = `<p style="color: #333; margin-top: 10px;">${message}</p>`;
+            notification.querySelector('.notification-title').textContent = `🔔 ${title}`;
+            notification.classList.add('show');
+
+            // Auto-hide after 10 seconds
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 10000);
+
+            // Browser notification if permitted
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification(title, { body: message });
+            } else if ('Notification' in window && Notification.permission !== 'denied') {
+                Notification.requestPermission();
+            }
+        }
+
+        function closeNotification() {
+            document.getElementById('notification').classList.remove('show');
+        }
+
+        // Export Functions
+        function exportFullBackup() {
+            const data = {
+                version: 2,
+                repName: repName,
+                exportDate: new Date().toISOString(),
+                leads: [],
+                notes: [],
+                meetings: [],
+                activity: []
+            };
+
+            const transaction = db.transaction(['leads', 'notes', 'meetings', 'activity'], 'readonly');
+
+            transaction.objectStore('leads').getAll().onsuccess = (e) => {
+                data.leads = e.target.result;
+
+                transaction.objectStore('notes').getAll().onsuccess = (e) => {
+                    data.notes = e.target.result;
+
+                    transaction.objectStore('meetings').getAll().onsuccess = (e) => {
+                        data.meetings = e.target.result;
+
+                        transaction.objectStore('activity').getAll().onsuccess = (e) => {
+                            data.activity = e.target.result;
+
+                            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `CRM_Backup_${repName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+
+                            logActivity('Data Export', 'Full backup exported');
+                            alert('Backup exported successfully!');
+                        };
+                    };
+                };
+            };
+        }
+
+        function exportToCSV() {
+            const transaction = db.transaction(['leads', 'notes'], 'readonly');
+            const leadsStore = transaction.objectStore('leads');
+            const notesStore = transaction.objectStore('notes');
+            
+            leadsStore.getAll().onsuccess = (e) => {
+                const leads = e.target.result;
+
+                if (leads.length === 0) {
+                    alert('No leads to export!');
+                    return;
+                }
+
+                notesStore.getAll().onsuccess = (notesEvent) => {
+                    const allNotes = notesEvent.target.result;
+
+                    let csv = 'Name,Company,Email,Phone,Status,Created Date,Rep Name,Latest Note\n';
+
+                    leads.forEach(lead => {
+                        const leadNotes = allNotes.filter(n => n.leadId === lead.id);
+                        const latestNote = leadNotes.length > 0 ?
+                            leadNotes.sort((a, b) => new Date(b.date) - new Date(a.date))[0].content : '';
+
+                        const row = [
+                            `"${lead.name}"`,
+                            `"${lead.company || ''}"`,
+                            `"${lead.email}"`,
+                            `"${lead.phone || ''}"`,
+                            `"${lead.status}"`,
+                            `"${new Date(lead.createdAt).toLocaleDateString()}"`,
+                            `"${repName}"`,
+                            `"${latestNote.replace(/"/g, '""')}"`
+                        ].join(',');
+
+                        csv += row + '\n';
+                    });
+
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `CRM_Leads_${repName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+
+                    logActivity('CSV Export', `Exported ${leads.length} leads to CSV`);
+                    alert(`Exported ${leads.length} leads to CSV!`);
+                };
+            };
+        }
+
+        // Import Functions
+        function importData(event) {
+            const file = event.target.files[0];
+            if (file) {
+                handleImportFile(file);
+            }
+        }
+
+        function handleImportFile(file) {
+            if (!file.name.endsWith('.json')) {
+                alert('Please select a valid JSON backup file');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+
+                    if (!data.leads || !Array.isArray(data.leads)) {
+                        alert('Invalid backup file format');
+                        return;
+                    }
+
+                    if (!confirm(`Import ${data.leads.length} leads from ${data.repName}?\nExported on: ${new Date(data.exportDate).toLocaleString()}\n\nThis will ADD to your existing data, not replace it.`)) {
+                        return;
+                    }
+
+                    importBackupData(data);
+                } catch (error) {
+                    alert('Error reading backup file: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function importBackupData(data) {
+            const transaction = db.transaction(['leads', 'notes', 'meetings', 'activity'], 'readwrite');
+            const leadsStore = transaction.objectStore('leads');
+            const notesStore = transaction.objectStore('notes');
+            const meetingsStore = transaction.objectStore('meetings');
+            const activityStore = transaction.objectStore('activity');
+
+            const leadIdMap = {};
+            let importedLeads = 0;
+            let importedNotes = 0;
+            let importedMeetings = 0;
+
+            // Import leads first
+            data.leads.forEach(lead => {
+                const oldId = lead.id;
+                delete lead.id; // Remove old ID to generate new one
+                const request = leadsStore.add(lead);
+                request.onsuccess = (e) => {
+                    leadIdMap[oldId] = e.target.result;
+                    importedLeads++;
+                };
+            });
+
+            transaction.oncomplete = () => {
+                // Import notes with new lead IDs
+                if (data.notes && data.notes.length > 0) {
+                    const notesTransaction = db.transaction(['notes'], 'readwrite');
+                    const notesStore = notesTransaction.objectStore('notes');
+
+                    data.notes.forEach(note => {
+                        delete note.id;
+                        note.leadId = leadIdMap[note.leadId];
+                        if (note.leadId) {
+                            notesStore.add(note);
+                            importedNotes++;
+                        }
+                    });
+                }
+
+                // Import meetings with new lead IDs
+                if (data.meetings && data.meetings.length > 0) {
+                    const meetingsTransaction = db.transaction(['meetings'], 'readwrite');
+                    const meetingsStore = meetingsTransaction.objectStore('meetings');
+
+                    data.meetings.forEach(meeting => {
+                        delete meeting.id;
+                        meeting.leadId = leadIdMap[meeting.leadId];
+                        if (meeting.leadId) {
+                            meetingsStore.add(meeting);
+                            importedMeetings++;
+                        }
+                    });
+                }
+
+                // Import activity logs
+                if (data.activity && data.activity.length > 0) {
+                    const activityTransaction = db.transaction(['activity'], 'readwrite');
+                    const activityStore = activityTransaction.objectStore('activity');
+
+                    data.activity.forEach(activity => {
+                        delete activity.id;
+                        activityStore.add(activity);
+                    });
+                }
+
+                logActivity('Data Import', `Imported ${importedLeads} leads, ${importedNotes} notes, ${importedMeetings} meetings from ${data.repName}`);
+                alert(`Successfully imported:\n${importedLeads} leads\n${importedNotes} notes\n${importedMeetings} meetings`);
+
+                loadDashboard();
+                showView('dashboard');
+            };
+        }
+
+        function clearAllData() {
+            if (!confirm('⚠️ WARNING: This will permanently delete ALL data!\n\nAre you sure you want to continue?')) {
+                return;
+            }
+
+            if (!confirm('This cannot be undone! Have you exported a backup?\n\nClick OK to proceed with deletion.')) {
+                return;
+            }
+
+            const transaction = db.transaction(['leads', 'notes', 'meetings', 'activity'], 'readwrite');
+
+            transaction.objectStore('leads').clear();
+            transaction.objectStore('notes').clear();
+            transaction.objectStore('meetings').clear();
+            transaction.objectStore('activity').clear();
+
+            transaction.oncomplete = () => {
+                alert('All data has been cleared.');
+                loadDashboard();
+                showView('dashboard');
+            };
+        }
+
+        // Email Integration
+        function emailLead() {
+            const transaction = db.transaction(['leads'], 'readonly');
+            transaction.objectStore('leads').get(currentLeadId).onsuccess = (e) => {
+                const lead = e.target.result;
+                const subject = encodeURIComponent(`Follow up - ${lead.name}`);
+                const body = encodeURIComponent(`Hi ${lead.name.split(' ')[0]},\n\n`);
+                window.location.href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
+
+                logActivity('Email Sent', `Opened email to ${lead.name}`);
+            };
+        }
+
+        // Navigation
+        function showView(viewId) {
+            console.log('Switching to view:', viewId);
+
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+            const viewElement = document.getElementById(viewId);
+            if (viewElement) {
+                viewElement.classList.add('active');
+            }
+
+            // Find and activate the corresponding nav button
+            const navButtons = document.querySelectorAll('.nav-btn');
+            const viewNames = ['dashboard', 'leads', 'calendar', 'activity', 'data-management', 'add-lead'];
+            const viewIndex = viewNames.indexOf(viewId);
+            if (viewIndex !== -1 && navButtons[viewIndex]) {
+                navButtons[viewIndex].classList.add('active');
+            }
+
+            if (viewId === 'dashboard') loadDashboard();
+            if (viewId === 'leads') loadLeads();
+            if (viewId === 'calendar') loadCalendar();
+            if (viewId === 'activity') loadActivityLog();
+        }
+
+        // Save Lead
+        function saveLead(e) {
+            e.preventDefault();
+
+            console.log('Saving lead...');
+
+            const lead = {
+                name: document.getElementById('lead-name').value,
+                company: document.getElementById('lead-company').value,
+                email: document.getElementById('lead-email').value,
+                phone: document.getElementById('lead-phone').value,
+                status: document.getElementById('lead-status').value,
+                createdAt: new Date().toISOString(),
+                repName: repName
+            };
+
+            console.log('Lead data:', lead);
+
+            if (!db) {
+                console.error('Database not initialized!');
+                alert('Database error - please refresh the page');
+                return;
+            }
+
+            const transaction = db.transaction(['leads'], 'readwrite');
+            const store = transaction.objectStore('leads');
+            const request = store.add(lead);
+
+            request.onsuccess = () => {
+                console.log('Lead saved with ID:', request.result);
+                const leadId = request.result;
+                const initialNote = document.getElementById('lead-notes').value;
+
+                if (initialNote) {
+                    const note = {
+                        leadId: leadId,
+                        content: initialNote,
+                        date: new Date().toISOString(),
+                        repName: repName
+                    };
+                    const noteTransaction = db.transaction(['notes'], 'readwrite');
+                    noteTransaction.objectStore('notes').add(note);
+                }
+
+                logActivity('Lead Created', `Added new lead: ${lead.name} (${lead.email})`);
+
+                document.getElementById('lead-form').reset();
+                alert('Lead saved successfully!');
+                loadDashboard(); // Refresh dashboard
+                loadLeads(); // Load leads immediately
+
+                // Switch to leads view
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+                document.getElementById('leads').classList.add('active');
+                document.querySelectorAll('.nav-btn')[1].classList.add('active');
+            };
+
             request.onerror = (e) => {
-                console.error('Error logging activity:', e);
+                console.error('Error saving lead:', e);
+                alert('Error saving lead: ' + e.target.error);
             };
         }
         
+        // Load Dashboard
         function loadDashboard() {
-            if (!db) return;
-            loadImportantNotes(); 
-            
             const transaction = db.transaction(['leads', 'meetings', 'activity'], 'readonly');
             const leadsStore = transaction.objectStore('leads');
             const meetingsStore = transaction.objectStore('meetings');
@@ -830,114 +1189,66 @@
                 `;
             };
 
-            // Upcoming Meetings for Dashboard Card
             meetingsStore.getAll().onsuccess = (e) => {
                 const meetings = e.target.result;
                 const now = new Date();
                 const upcoming = meetings
                     .filter(m => new Date(`${m.date}T${m.time}`) > now)
                     .sort((a, b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`))
-                    .slice(0, 5); 
+                    .slice(0, 5);
 
                 document.getElementById('upcoming-meetings').innerHTML = upcoming.length ?
                     upcoming.map(m => `
-                        <div class="activity-item" onclick="viewMeeting(${m.id})" style="border-left-color: #f39c12;">
+                        <div class="activity-item">
                             <div class="activity-time">${new Date(`${m.date}T${m.time}`).toLocaleString()}</div>
-                            <div class="activity-text"><strong>Meeting:</strong> ${m.leadName} ${m.notes ? `- ${m.notes.substring(0, 30)}...` : ''}</div>
+                            <div class="activity-text"><strong>${m.leadName}</strong> ${m.notes ? `- ${m.notes}` : ''}</div>
                         </div>
                     `).join('') :
-                    '<p style="text-align: center; color: #999; margin-top: 10px;">No upcoming meetings.</p>';
+                    '<p style="text-align: center; color: #666;">No upcoming meetings.</p>';
             };
 
-            // Recent Activity for Dashboard Card
             const activityIndex = activityStore.index('timestamp');
             const activityRequest = activityIndex.openCursor(null, 'prev');
             const recentActivities = [];
-            
+
             activityRequest.onsuccess = (e) => {
                 const cursor = e.target.result;
-                if (cursor && recentActivities.length < 8) { 
+                if (cursor && recentActivities.length < 10) {
                     recentActivities.push(cursor.value);
                     cursor.continue();
                 } else {
                     document.getElementById('recent-activity-card').innerHTML = recentActivities.length ?
                         recentActivities.map(activity => `
-                            <div class="activity-item" style="border-left-color: ${activity.action.includes('Created') ? '#2ecc71' : activity.action.includes('Meeting') ? '#f39c12' : '#3498db'};">
+                            <div class="activity-item">
                                 <div class="activity-time">${new Date(activity.timestamp).toLocaleString()}</div>
                                 <div class="activity-text"><strong>${activity.action}</strong>: ${activity.details}</div>
                             </div>
                         `).join('') :
-                        '<p style="text-align: center; color: #999; margin-top: 10px;">No recent activity.</p>';
+                        '<p style="text-align: center; color: #666;">No recent activity.</p>';
                 }
             };
         }
 
-        function saveLead(e) {
-            e.preventDefault();
-            
+        // Load Leads
+        function loadLeads() {
+            console.log('Loading leads...');
+
             if (!db) {
                 console.error('Database not initialized!');
-                alert('Database Error: Please ensure IndexedDB is available and try refreshing the page.');
                 return;
             }
-            
-            const lead = {
-                name: document.getElementById('lead-name').value,
-                company: document.getElementById('lead-company').value,
-                email: document.getElementById('lead-email').value,
-                phone: document.getElementById('lead-phone').value,
-                status: document.getElementById('lead-status').value,
-                createdAt: new Date().toISOString(),
-                repName: repName
-            };
-            
-            const transaction = db.transaction(['leads'], 'readwrite');
-            const store = transaction.objectStore('leads');
-            const request = store.add(lead);
-            
-            request.onsuccess = () => {
-                const leadId = request.result;
-                const initialNote = document.getElementById('lead-notes').value;
-                
-                if (initialNote) {
-                    const note = {
-                        leadId: leadId,
-                        content: initialNote,
-                        date: new Date().toISOString(),
-                        repName: repName
-                    };
-                    const noteTransaction = db.transaction(['notes'], 'readwrite');
-                    noteTransaction.objectStore('notes').add(note);
-                }
-                
-                logActivity('Lead Created', `Added new lead: ${lead.name} (${lead.email})`);
-                
-                document.getElementById('lead-form').reset();
-                alert('Lead saved successfully!');
-                
-                // Refresh views and switch to leads
-                loadLeads(); 
-                loadDashboard(); 
-                showView('leads');
-            };
-            
-            request.onerror = (e) => {
-                console.error('Error saving lead:', e);
-                alert('Error saving lead: ' + e.target.error.name + ' - ' + e.target.error.message);
-            };
-        }
-        
-        function loadLeads() {
-            if (!db) { return; }
+
             const transaction = db.transaction(['leads'], 'readonly');
             const store = transaction.objectStore('leads');
             const request = store.getAll();
-            
+
             request.onsuccess = () => {
                 const leads = request.result;
+                console.log('Leads loaded:', leads.length, leads);
+
                 const leadsContainer = document.getElementById('leads-list');
                 leadsContainer.innerHTML = '';
-                
+
                 if (leads.length === 0) {
                     leadsContainer.innerHTML = '<p style="text-align: center; color: #666;">No leads yet. Add your first lead!</p>';
                 } else {
@@ -950,23 +1261,364 @@
             };
         }
 
-        function loadCalendar() {
-            if (!db) return;
+        // Filter Leads
+        function filterLeads() {
+            const searchText = document.getElementById('search-input').value.toLowerCase();
+            const statusFilter = document.getElementById('status-filter').value;
 
+            const transaction = db.transaction(['leads'], 'readonly');
+            const store = transaction.objectStore('leads');
+            const request = store.getAll();
+
+            request.onsuccess = () => {
+                let leads = request.result;
+
+                if (searchText) {
+                    leads = leads.filter(lead =>
+                        lead.name.toLowerCase().includes(searchText) ||
+                        (lead.company && lead.company.toLowerCase().includes(searchText)) ||
+                        lead.email.toLowerCase().includes(searchText)
+                    );
+                }
+
+                if (statusFilter) {
+                    leads = leads.filter(lead => lead.status === statusFilter);
+                }
+
+                const leadsContainer = document.getElementById('leads-list');
+                leadsContainer.innerHTML = '';
+
+                if (leads.length === 0) {
+                    leadsContainer.innerHTML = '<p style="text-align: center; color: #666;">No leads match your search.</p>';
+                } else {
+                    leads.forEach(lead => createLeadCard(lead));
+                }
+            };
+        }
+
+        // Create Lead Card with Inline Editing
+        function createLeadCard(lead) {
+            console.log('Creating card for lead:', lead.id, lead.name);
+
+            // Get recent notes for this lead
+            getNotes(lead.id, (notes) => {
+                console.log('Notes for lead', lead.id, ':', notes.length);
+                const recentNotes = notes.slice(0, 3);
+                const hasMoreNotes = notes.length > 3;
+
+                const cardHtml = `
+                    <div class="lead-card" id="lead-card-${lead.id}">
+                        <div class="lead-header">
+                            <div>
+                                <div class="lead-name editable-field" onclick="editField(${lead.id}, 'name', '${lead.name.replace(/'/g, "\\'")}')">
+                                    ${lead.name}
+                                </div>
+                            </div>
+                            <select class="inline-status-select status-${lead.status}" onchange="updateStatusInline(${lead.id}, this.value)">
+                                <option value="new" ${lead.status === 'new' ? 'selected' : ''}>NEW</option>
+                                <option value="contacted" ${lead.status === 'contacted' ? 'selected' : ''}>CONTACTED</option>
+                                <option value="qualified" ${lead.status === 'qualified' ? 'selected' : ''}>QUALIFIED</option>
+                                <option value="won" ${lead.status === 'won' ? 'selected' : ''}>WON</option>
+                                <option value="lost" ${lead.status === 'lost' ? 'selected' : ''}>LOST</option>
+                            </select>
+                        </div>
+                        <div class="lead-info">
+                            ${lead.company ? `<div class="info-item">
+                                <strong>Company:</strong>
+                                <span class="editable-field" onclick="editField(${lead.id}, 'company', '${(lead.company || '').replace(/'/g, "\\'")}')">
+                                    ${lead.company}
+                                </span>
+                            </div>` : `<div class="info-item">
+                                <strong>Company:</strong>
+                                <span class="editable-field" onclick="editField(${lead.id}, 'company', '')" style="color: #999;">
+                                    Click to add
+                                </span>
+                            </div>`}
+                            <div class="info-item">
+                                <strong>Email:</strong>
+                                <span class="editable-field" onclick="editField(${lead.id}, 'email', '${lead.email.replace(/'/g, "\\'")}')">
+                                    ${lead.email}
+                                </span>
+                            </div>
+                            ${lead.phone ? `<div class="info-item">
+                                <strong>Phone:</strong>
+                                <span class="editable-field" onclick="editField(${lead.id}, 'phone', '${lead.phone.replace(/'/g, "\\'")}')">
+                                    ${lead.phone}
+                                </span>
+                            </div>` : `<div class="info-item">
+                                <strong>Phone:</strong>
+                                <span class="editable-field" onclick="editField(${lead.id}, 'phone', '')" style="color: #999;">
+                                    Click to add
+                                </span>
+                            </div>`}
+                            <div class="info-item"><strong>Added:</strong> ${new Date(lead.createdAt).toLocaleDateString()}</div>
+                            ${lead.repName ? `<div class="info-item"><strong>Rep:</strong> ${lead.repName}</div>` : ''}
+                        </div>
+
+                        <div class="quick-note-section">
+                            <div class="quick-note-form">
+                                <input type="text" id="quick-note-${lead.id}" placeholder="Add a quick note..." onkeypress="if(event.key==='Enter') addQuickNote(${lead.id})">
+                                <button class="btn" onclick="addQuickNote(${lead.id})">Add Note</button>
+                            </div>
+
+                            <div class="recent-notes" id="notes-${lead.id}">
+                                ${recentNotes.length > 0 ? `
+                                    ${recentNotes.map(note => `
+                                        <div class="mini-note">
+                                            <div class="mini-note-date">${new Date(note.date).toLocaleString()}${note.repName ? ` - ${note.repName}` : ''}</div>
+                                            <div class="mini-note-text">${note.content}</div>
+                                        </div>
+                                    `).join('')}
+                                    ${hasMoreNotes ? `<button class="toggle-notes" onclick="viewLead(${lead.id})">View all ${notes.length} notes →</button>` : ''}
+                                ` : '<p style="color: #999; font-size: 13px; margin: 0;">No notes yet</p>'}
+                            </div>
+                        </div>
+
+                        <div class="lead-actions" style="margin-top: 15px;">
+                            <button class="btn" onclick="viewLead(${lead.id})">Full Details</button>
+                            <button class="btn" onclick="openMeetingModal(${lead.id})">Schedule Meeting</button>
+                            <button class="btn" onclick="emailLeadDirect(${lead.id})">📧 Email</button>
+                            <button class="btn btn-danger" onclick="deleteLead(${lead.id})">Delete</button>
+                        </div>
+                    </div>
+                `;
+
+                // Insert or update the card
+                const existingCard = document.getElementById(`lead-card-${lead.id}`);
+                if (existingCard) {
+                    existingCard.outerHTML = cardHtml;
+                } else {
+                    document.getElementById('leads-list').insertAdjacentHTML('beforeend', cardHtml);
+                }
+            });
+        }
+
+        // Get notes for a lead
+        function getNotes(leadId, callback) {
+            const transaction = db.transaction(['notes'], 'readonly');
+            const notesStore = transaction.objectStore('notes');
+            const notesIndex = notesStore.index('leadId');
+
+            notesIndex.getAll(leadId).onsuccess = (e) => {
+                const notes = e.target.result.sort((a, b) => new Date(b.date) - new Date(a.date));
+                callback(notes);
+            };
+        }
+
+        // Add quick note
+        function addQuickNote(leadId) {
+            const input = document.getElementById(`quick-note-${leadId}`);
+            const content = input.value.trim();
+
+            if (!content) {
+                alert('Please enter a note');
+                return;
+            }
+
+            const note = {
+                leadId: leadId,
+                content: content,
+                date: new Date().toISOString(),
+                repName: repName
+            };
+
+            const transaction = db.transaction(['notes', 'leads'], 'readwrite');
+            transaction.objectStore('notes').add(note);
+
+            transaction.objectStore('leads').get(leadId).onsuccess = (e) => {
+                const lead = e.target.result;
+                logActivity('Note Added', `Added note to ${lead.name}`);
+
+                // Refresh just this card
+                input.value = '';
+                createLeadCard(lead);
+            };
+        }
+
+        // Edit field inline
+        function editField(leadId, fieldName, currentValue) {
+            const transaction = db.transaction(['leads'], 'readonly');
+            transaction.objectStore('leads').get(leadId).onsuccess = (e) => {
+                const lead = e.target.result;
+                const card = document.getElementById(`lead-card-${leadId}`);
+                card.classList.add('editing');
+
+                const newValue = prompt(`Edit ${fieldName}:`, currentValue || '');
+
+                if (newValue !== null && newValue !== currentValue) {
+                    lead[fieldName] = newValue;
+
+                    const updateTransaction = db.transaction(['leads'], 'readwrite');
+                    updateTransaction.objectStore('leads').put(lead);
+
+                    updateTransaction.oncomplete = () => {
+                        logActivity('Lead Updated', `Updated ${fieldName} for ${lead.name}`);
+                        card.classList.remove('editing');
+                        createLeadCard(lead);
+                    };
+                } else {
+                    card.classList.remove('editing');
+                }
+            };
+        }
+
+        // Update status inline
+        function updateStatusInline(leadId, newStatus) {
+            const transaction = db.transaction(['leads'], 'readwrite');
+            const store = transaction.objectStore('leads');
+
+            store.get(leadId).onsuccess = (e) => {
+                const lead = e.target.result;
+                const oldStatus = lead.status;
+                lead.status = newStatus;
+                store.put(lead);
+
+                logActivity('Status Updated', `${lead.name}: ${oldStatus} → ${newStatus}`);
+
+                // Refresh the card to show new status color
+                createLeadCard(lead);
+            };
+
+            transaction.oncomplete = () => {
+                loadDashboard();
+            };
+        }
+
+        // Email lead directly
+        function emailLeadDirect(leadId) {
+            const transaction = db.transaction(['leads'], 'readonly');
+            transaction.objectStore('leads').get(leadId).onsuccess = (e) => {
+                const lead = e.target.result;
+                const subject = encodeURIComponent(`Follow up - ${lead.name}`);
+                const body = encodeURIComponent(`Hi ${lead.name.split(' ')[0]},\n\n`);
+                window.location.href = `mailto:${lead.email}?subject=${subject}&body=${body}`;
+
+                logActivity('Email Sent', `Opened email to ${lead.name}`);
+            };
+        }
+
+        // View Lead
+        function viewLead(id) {
+            currentLeadId = id;
+            const transaction = db.transaction(['leads', 'notes'], 'readonly');
+            const leadsStore = transaction.objectStore('leads');
+            const notesStore = transaction.objectStore('notes');
+
+            leadsStore.get(id).onsuccess = (e) => {
+                const lead = e.target.result;
+                document.getElementById('modal-lead-name').textContent = lead.name;
+                document.getElementById('modal-lead-info').innerHTML = `
+                    <div class="lead-info">
+                        ${lead.company ? `<div class="info-item"><strong>Company:</strong> ${lead.company}</div>` : ''}
+                        <div class="info-item"><strong>Email:</strong> ${lead.email}</div>
+                        ${lead.phone ? `<div class="info-item"><strong>Phone:</strong> ${lead.phone}</div>` : ''}
+                        <div class="info-item"><strong>Status:</strong> <span class="lead-status status-${lead.status}">${lead.status.toUpperCase()}</span></div>
+                        <div class="info-item"><strong>Added:</strong> ${new Date(lead.createdAt).toLocaleDateString()}</div>
+                        ${lead.repName ? `<div class="info-item"><strong>Rep:</strong> ${lead.repName}</div>` : ''}
+                    </div>
+                `;
+            };
+
+            const notesIndex = notesStore.index('leadId');
+            notesIndex.getAll(id).onsuccess = (e) => {
+                const notes = e.target.result.sort((a, b) => new Date(b.date) - new Date(a.date));
+                document.getElementById('modal-notes-list').innerHTML = notes.length ?
+                    notes.map(note => `
+                        <div class="note-item">
+                            <div class="note-date">${new Date(note.date).toLocaleString()}${note.repName ? ` - ${note.repName}` : ''}</div>
+                            <div class="note-content">${note.content}</div>
+                        </div>
+                    `).join('') :
+                    '<p style="color: #666;">No notes yet.</p>';
+            };
+
+            document.getElementById('lead-modal').classList.add('active');
+        }
+
+        // Add Note
+        function addNote(e) {
+            e.preventDefault();
+            const content = document.getElementById('new-note').value;
+
+            const note = {
+                leadId: currentLeadId,
+                content: content,
+                date: new Date().toISOString(),
+                repName: repName
+            };
+
+            const transaction = db.transaction(['notes', 'leads'], 'readwrite');
+            transaction.objectStore('notes').add(note);
+
+            transaction.objectStore('leads').get(currentLeadId).onsuccess = (e) => {
+                const lead = e.target.result;
+                logActivity('Note Added', `Added note to ${lead.name}`);
+            };
+
+            transaction.oncomplete = () => {
+                document.getElementById('new-note').value = '';
+                viewLead(currentLeadId);
+            };
+        }
+
+        // Update Status
+        function updateStatus(id) {
+            const newStatus = prompt('Enter new status (new, contacted, qualified, won, lost):');
+            if (newStatus && ['new', 'contacted', 'qualified', 'won', 'lost'].includes(newStatus)) {
+                const transaction = db.transaction(['leads'], 'readwrite');
+                const store = transaction.objectStore('leads');
+
+                store.get(id).onsuccess = (e) => {
+                    const lead = e.target.result;
+                    const oldStatus = lead.status;
+                    lead.status = newStatus;
+                    store.put(lead);
+
+                    logActivity('Status Updated', `${lead.name}: ${oldStatus} → ${newStatus}`);
+                };
+
+                transaction.oncomplete = () => {
+                    loadLeads();
+                    loadDashboard();
+                };
+            }
+        }
+
+        // Delete Lead
+        function deleteLead(id) {
+            if (confirm('Are you sure you want to delete this lead?')) {
+                const transaction = db.transaction(['leads'], 'readwrite');
+                const store = transaction.objectStore('leads');
+
+                store.get(id).onsuccess = (e) => {
+                    const lead = e.target.result;
+                    store.delete(id);
+
+                    logActivity('Lead Deleted', `Deleted lead: ${lead.name}`);
+                };
+
+                transaction.oncomplete = () => {
+                    loadLeads();
+                    loadDashboard();
+                };
+            }
+        }
+
+        // Calendar Functions
+        function loadCalendar() {
             const year = currentMonth.getFullYear();
             const month = currentMonth.getMonth();
             
             document.getElementById('calendar-month').textContent = 
                 currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
             
-            const firstDay = new Date(year, month, 1).getDay(); // 0 for Sunday, 1 for Monday, etc.
+            const firstDay = new Date(year, month, 1).getDay();
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             
             const transaction = db.transaction(['meetings'], 'readonly');
             const meetingsStore = transaction.objectStore('meetings');
-            const request = meetingsStore.getAll();
             
-            request.onsuccess = (e) => {
+            meetingsStore.getAll().onsuccess = (e) => {
                 const meetings = e.target.result;
                 const now = new Date();
                 let html = '';
@@ -976,15 +1628,13 @@
                     html += `<div class="calendar-day" style="background: #667eea; color: white; font-weight: bold; text-align: center;">${day}</div>`;
                 });
                 
-                // Fill in blank days for the first week
                 for (let i = 0; i < firstDay; i++) {
                     html += '<div class="calendar-day"></div>';
                 }
                 
                 for (let day = 1; day <= daysInMonth; day++) {
                     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                    const dayMeetings = meetings.filter(m => m.date === dateStr)
-                                                .sort((a, b) => a.time.localeCompare(b.time)); // Sort meetings by time
+                    const dayMeetings = meetings.filter(m => m.date === dateStr);
                     
                     html += `<div class="calendar-day" onclick="quickAddMeeting('${dateStr}')" style="cursor: pointer;">
                         <div class="calendar-day-header">${day}</div>
@@ -998,348 +1648,114 @@
                 
                 document.getElementById('calendar-grid').innerHTML = html;
             };
-
-            request.onerror = (e) => {
-                console.error('Error loading calendar meetings:', e);
-            };
         }
         
-        function loadActivityLog() {
-            if (!db) return;
-            const transaction = db.transaction(['activity'], 'readonly');
-            const store = transaction.objectStore('activity');
-            const index = store.index('timestamp');
-            const request = index.openCursor(null, 'prev'); // 'prev' for descending order
-            
-            const activities = [];
-            request.onsuccess = (e) => {
-                const cursor = e.target.result;
-                if (cursor) {
-                    activities.push(cursor.value);
-                    cursor.continue();
-                } else {
-                    document.getElementById('activity-list').innerHTML = activities.length ?
-                        activities.map(activity => `
-                            <div class="activity-item">
-                                <div class="activity-time">${new Date(activity.timestamp).toLocaleString()} - ${activity.repName}</div>
-                                <div class="activity-text"><strong>${activity.action}</strong>: ${activity.details}</div>
-                            </div>
-                        `).join('') :
-                        '<p style="text-align: center; color: #666;">No activity yet.</p>';
-                }
-            };
-            request.onerror = (e) => {
-                console.error('Error loading activity log:', e);
-            };
-        }
-
-        // --- EXISTING FUNCTIONS (Unchanged functionality) ---
-        function updateRepNameDisplay() { document.getElementById('rep-name-display').textContent = repName; }
-        function setRepName() { const name = prompt('Enter sales rep name:', repName); if (name && name.trim()) { repName = name.trim(); localStorage.setItem('repName', repName); updateRepNameDisplay(); logActivity('Rep name updated', `Name set to: ${repName}`); } }
-        function setupDragDrop() { const zone = document.getElementById('import-zone'); if (!zone) return; zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); }); zone.addEventListener('dragleave', () => { zone.classList.remove('dragover'); }); zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('dragover'); const files = e.dataTransfer.files; if (files.length > 0) { handleImportFile(files[0]); } }); }
-        
-        function checkReminders() { 
-            if (!db) return;
-            const now = new Date();
-            const transaction = db.transaction(['meetings'], 'readonly');
-            const store = transaction.objectStore('meetings');
-            const index = store.index('datetime'); // Use the datetime index
-
-            const request = index.openCursor();
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    const meeting = cursor.value;
-                    const meetingDateTime = new Date(meeting.datetime);
-                    
-                    if (meeting.reminder > 0 && !notifiedMeetings[meeting.id]) {
-                        const reminderTime = new Date(meetingDateTime.getTime() - meeting.reminder * 60 * 1000);
-                        
-                        if (now >= reminderTime && now < meetingDateTime) {
-                            showNotification('Meeting Reminder!', `Upcoming meeting with ${meeting.leadName} at ${meeting.time} on ${new Date(meeting.date).toLocaleDateString()}. Notes: ${meeting.notes || 'N/A'}`);
-                            notifiedMeetings[meeting.id] = true;
-                            localStorage.setItem('notifiedMeetings', JSON.stringify(notifiedMeetings));
-                        }
-                    }
-                    cursor.continue();
-                }
-            };
-            request.onerror = (e) => {
-                console.error('Error checking reminders:', e);
-            };
+        function changeMonth(delta) {
+            currentMonth.setMonth(currentMonth.getMonth() + delta);
+            loadCalendar();
         }
         
-        function showNotification(title, message) { 
-            const notification = document.getElementById('notification');
-            document.getElementById('notification-content').innerHTML = `<strong>${title}</strong><p>${message}</p>`;
-            notification.classList.add('show');
-            setTimeout(() => {
-                notification.classList.remove('show');
-            }, 8000); // Notification visible for 8 seconds
-        }
-        function closeNotification() { document.getElementById('notification').classList.remove('show'); }
-        
-        function exportFullBackup() { 
-            if (!db) return alert('Database not initialized!');
-            const data = {};
-            const transaction = db.transaction(db.objectStoreNames, 'readonly');
-            let completedStores = 0;
-
-            Array.from(db.objectStoreNames).forEach(storeName => {
-                const store = transaction.objectStore(storeName);
-                const request = store.getAll();
-                request.onsuccess = (event) => {
-                    data[storeName] = event.target.result;
-                    completedStores++;
-                    if (completedStores === db.objectStoreNames.length) {
-                        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `crm_backup_${new Date().toISOString().slice(0,10)}.json`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                        logActivity('Data Exported', 'Full CRM database backup downloaded.');
-                        alert('Full CRM backup downloaded!');
-                    }
-                };
-                request.onerror = (e) => {
-                    console.error(`Error exporting store ${storeName}:`, e);
-                    alert(`Error exporting data from ${storeName}. See console for details.`);
-                };
-            });
-        }
-        function exportToCSV() { 
-            if (!db) return alert('Database not initialized!');
+        // Meeting Functions
+        function quickAddMeeting(dateStr) {
             const transaction = db.transaction(['leads'], 'readonly');
             const store = transaction.objectStore('leads');
             const request = store.getAll();
-            request.onsuccess = (event) => {
-                const leads = event.target.result;
+
+            request.onsuccess = () => {
+                const leads = request.result;
+
                 if (leads.length === 0) {
-                    alert('No leads to export!');
+                    alert('Please add some leads first!');
                     return;
                 }
-                const header = ["ID", "Name", "Company", "Email", "Phone", "Status", "CreatedAt", "RepName"];
-                const rows = leads.map(lead => [
-                    lead.id,
-                    `"${lead.name.replace(/"/g, '""')}"`,
-                    `"${(lead.company || '').replace(/"/g, '""')}"`,
-                    `"${lead.email.replace(/"/g, '""')}"`,
-                    `"${(lead.phone || '').replace(/"/g, '""')}"`,
-                    `"${lead.status.replace(/"/g, '""')}"`,
-                    `"${new Date(lead.createdAt).toLocaleDateString()}"`,
-                    `"${(lead.repName || '').replace(/"/g, '""')}"`
-                ]);
-                const csvContent = "data:text/csv;charset=utf-8," 
-                                 + header.join(",") + "\n" 
-                                 + rows.map(e => e.join(",")).join("\n");
-                const encodedUri = encodeURI(csvContent);
-                const link = document.createElement("a");
-                link.setAttribute("href", encodedUri);
-                link.setAttribute("download", `crm_leads_${new Date().toISOString().slice(0,10)}.csv`);
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                logActivity('Data Exported', 'Leads exported to CSV.');
-                alert('Leads exported to CSV!');
-            };
-            request.onerror = (e) => {
-                console.error('Error exporting leads to CSV:', e);
-                alert('Error exporting leads. See console for details.');
-            };
-        }
-        function importData(event) {
-            const file = event.target.files[0];
-            if (file) {
-                handleImportFile(file);
-            }
-        }
-        function handleImportFile(file) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const data = JSON.parse(e.target.result);
-                    if (confirm('Importing data will replace existing data in the CRM. Are you sure?')) {
-                        importBackupData(data);
-                    }
-                } catch (error) {
-                    alert('Invalid JSON file. Please upload a valid CRM backup file.');
-                    console.error('Error parsing JSON:', error);
-                }
-            };
-            reader.onerror = (e) => {
-                alert('Error reading file.');
-                console.error('Error reading file:', e);
-            };
-            reader.readAsText(file);
-        }
-        function importBackupData(data) {
-            if (!db) return alert('Database not initialized!');
-            // Clear existing data first
-            const clearTransaction = db.transaction(db.objectStoreNames, 'readwrite');
-            let clearPromises = [];
-            Array.from(db.objectStoreNames).forEach(storeName => {
-                clearPromises.push(new Promise((resolve, reject) => {
-                    clearTransaction.objectStore(storeName).clear().onsuccess = resolve;
-                    clearTransaction.objectStore(storeName).clear().onerror = reject;
-                }));
-            });
 
-            Promise.all(clearPromises).then(() => {
-                console.log('All existing stores cleared.');
-                const importTransaction = db.transaction(db.objectStoreNames, 'readwrite');
-                let importPromises = [];
+                const select = document.getElementById('meeting-lead');
+                select.innerHTML = leads.map(lead =>
+                    `<option value="${lead.id}">${lead.name}</option>`
+                ).join('');
+
+                // Pre-fill the date
+                document.getElementById('meeting-date').value = dateStr;
+
+                document.getElementById('meeting-modal').classList.add('active');
+            };
+        }
+
+        function openMeetingModal(leadId = null) {
+            const transaction = db.transaction(['leads'], 'readonly');
+            const store = transaction.objectStore('leads');
+            const request = store.getAll();
+
+            request.onsuccess = () => {
+                const leads = request.result;
+                const select = document.getElementById('meeting-lead');
+                select.innerHTML = leads.map(lead =>
+                    `<option value="${lead.id}" ${leadId === lead.id ? 'selected' : ''}>${lead.name}</option>`
+                ).join('');
+
+                document.getElementById('meeting-modal').classList.add('active');
+            };
+        }
+
+        function viewMeeting(meetingId) {
+            const transaction = db.transaction(['meetings'], 'readonly');
+            transaction.objectStore('meetings').get(meetingId).onsuccess = (e) => {
+                const meeting = e.target.result;
+                alert(`Meeting with ${meeting.leadName}\n\nDate: ${meeting.date}\nTime: ${meeting.time}\n\nNotes: ${meeting.notes || 'No notes'}`);
+            };
+        }
+
+        function saveMeeting(e) {
+            e.preventDefault();
+
+            const leadId = parseInt(document.getElementById('meeting-lead').value);
+            const date = document.getElementById('meeting-date').value;
+            const time = document.getElementById('meeting-time').value;
+            const notes = document.getElementById('meeting-notes').value;
+            const reminder = parseInt(document.getElementById('meeting-reminder').value);
+
+            const leadsTransaction = db.transaction(['leads'], 'readonly');
+            leadsTransaction.objectStore('leads').get(leadId).onsuccess = (e) => {
+                const lead = e.target.result;
                 
-                Array.from(db.objectStoreNames).forEach(storeName => {
-                    if (data[storeName]) {
-                        data[storeName].forEach(item => {
-                            importPromises.push(new Promise((resolve, reject) => {
-                                // For items with auto-incremented keys, remove the 'id' to let the DB assign new ones
-                                // This is safer for imports to avoid key conflicts.
-                                const itemToImport = { ...item };
-                                if (storeName !== 'activity' && storeName !== 'importantNotes' && storeName !== 'notes' && storeName !== 'meetings') {
-                                     // Only remove ID for stores that might have complex relationships if new IDs are needed
-                                     // For simplicity and if IDs are globally unique, you might retain them.
-                                     // For this app, let's allow DB to reassign, especially for 'leads' which are central.
-                                     delete itemToImport.id; 
-                                }
+                const meeting = {
+                    leadId: leadId,
+                    leadName: lead.name,
+                    date: date,
+                    time: time,
+                    notes: notes,
+                    reminder: reminder,
+                    datetime: `${date}T${time}`,
+                    createdAt: new Date().toISOString(),
+                    repName: repName,
+                    notified: false
+                };
 
-                                const request = importTransaction.objectStore(storeName).add(itemToImport);
-                                request.onsuccess = resolve;
-                                request.onerror = (e) => {
-                                    console.warn(`Error adding item to ${storeName}:`, e.target.error.message, item);
-                                    resolve(); // Resolve even on error to allow other imports to continue
-                                };
-                            }));
-                        });
-                    }
-                });
+                const meetingTransaction = db.transaction(['meetings'], 'readwrite');
+                meetingTransaction.objectStore('meetings').add(meeting);
 
-                Promise.all(importPromises).then(() => {
-                    alert('Data imported successfully!');
-                    logActivity('Data Imported', 'CRM data imported from backup.');
-                    showView('dashboard'); // Refresh UI
-                    loadLeads();
+                meetingTransaction.oncomplete = () => {
+                    logActivity('Meeting Scheduled', `Meeting with ${lead.name} on ${date} at ${time}`);
+                    document.getElementById('meeting-form').reset();
+                    closeMeetingModal();
+                    alert('Meeting scheduled successfully!');
                     loadCalendar();
-                    loadActivityLog();
                     loadDashboard();
-                }).catch(error => {
-                    console.error('Error during data import:', error);
-                    alert('Error during data import. Some data might not have been imported.');
-                });
-            }).catch(error => {
-                console.error('Error clearing data before import:', error);
-                alert('Failed to clear existing data before import.');
-            });
-        }
-        function clearAllData() { 
-            if (!confirm('Are you absolutely sure you want to delete ALL CRM data? This cannot be undone!')) {
-                return;
-            }
-            if (!db) return alert('Database not initialized!');
-
-            const transaction = db.transaction(db.objectStoreNames, 'readwrite');
-            let clearedCount = 0;
-            const totalStores = db.objectStoreNames.length;
-
-            Array.from(db.objectStoreNames).forEach(storeName => {
-                const request = transaction.objectStore(storeName).clear();
-                request.onsuccess = () => {
-                    clearedCount++;
-                    if (clearedCount === totalStores) {
-                        alert('All CRM data has been cleared!');
-                        logActivity('Data Cleared', 'All CRM data permanently deleted.');
-                        // Reset UI
-                        loadLeads();
-                        loadCalendar();
-                        loadActivityLog();
-                        loadDashboard();
-                        showView('dashboard');
-                    }
                 };
-                request.onerror = (e) => {
-                    console.error(`Error clearing store ${storeName}:`, e);
-                    alert(`Error clearing data from ${storeName}. See console for details.`);
-                };
-            });
-        }
-        function emailLead() { /* This is now handled by emailLeadDirect(id) */ }
-        function showView(viewId) { 
-            console.log(`showView called for: ${viewId}`);
-            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-            
-            const viewElement = document.getElementById(viewId);
-            if (viewElement) {
-                viewElement.classList.add('active');
-            }
-            
-            // Activate the corresponding navigation button
-            const navButtons = document.querySelectorAll('.nav-btn');
-            const viewNames = ['dashboard', 'leads', 'calendar', 'activity', 'data-management', 'add-lead'];
-            const viewIndex = viewNames.indexOf(viewId);
-            if (viewIndex !== -1 && navButtons[viewIndex]) {
-                navButtons[viewIndex].classList.add('active');
-            } else if (viewId === 'add-lead') { // Special handling for the distinct + Add Lead button
-                document.querySelector('.nav-btn.add-lead').classList.add('active');
-            }
-            
-            // Load content specific to the view
-            if (viewId === 'dashboard') loadDashboard();
-            if (viewId === 'leads') loadLeads();
-            if (viewId === 'calendar') loadCalendar();
-            if (viewId === 'activity') loadActivityLog();
-        }
-        function filterLeads() { const searchText = document.getElementById('search-input').value.toLowerCase(); const statusFilter = document.getElementById('status-filter').value; const transaction = db.transaction(['leads'], 'readonly'); const store = transaction.objectStore('leads'); const request = store.getAll(); request.onsuccess = () => { let leads = request.result; if (searchText) { leads = leads.filter(lead => lead.name.toLowerCase().includes(searchText) || (lead.company && lead.company.toLowerCase().includes(searchText)) || lead.email.toLowerCase().includes(searchText) ); } if (statusFilter) { leads = leads.filter(lead => lead.status === statusFilter); } const leadsContainer = document.getElementById('leads-list'); leadsContainer.innerHTML = ''; if (leads.length === 0) { leadsContainer.innerHTML = '<p style="text-align: center; color: #666;">No leads match your search.</p>'; } else { leads.forEach(lead => createLeadCard(lead)); } }; }
-        function createLeadCard(lead) { getNotes(lead.id, (notes) => { const recentNotes = notes.slice(0, 3); const hasMoreNotes = notes.length > 3; const cardHtml = `<div class="lead-card" id="lead-card-${lead.id}"><div class="lead-header"><div><div class="lead-name editable-field" onclick="editField(${lead.id}, 'name', '${lead.name.replace(/'/g, "\\'")}')">${lead.name}</div></div><select class="inline-status-select status-${lead.status}" onchange="updateStatusInline(${lead.id}, this.value)"><option value="new" ${lead.status === 'new' ? 'selected' : ''}>NEW</option><option value="contacted" ${lead.status === 'contacted' ? 'selected' : ''}>CONTACTED</option><option value="qualified" ${lead.status === 'qualified' ? 'selected' : ''}>QUALIFIED</option><option value="won" ${lead.status === 'won' ? 'selected' : ''}>WON</option><option value="lost" ${lead.status === 'lost' ? 'selected' : ''}>LOST</option></select></div><div class="lead-info">${lead.company ? `<div class="info-item"><strong>Company:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'company', '${(lead.company || '').replace(/'/g, "\\'")}')">${lead.company}</span></div>` : `<div class="info-item"><strong>Company:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'company', '')" style="color: #999;">Click to add</span></div>`} <div class="info-item"><strong>Email:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'email', '${lead.email.replace(/'/g, "\\'")}')">${lead.email}</span></div> ${lead.phone ? `<div class="info-item"><strong>Phone:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'phone', '${lead.phone.replace(/'/g, "\\'")}')">${lead.phone}</span></div>` : `<div class="info-item"><strong>Phone:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'phone', '')" style="color: #999;">Click to add</span></div>`} <div class="info-item"><strong>Added:</strong> ${new Date(lead.createdAt).toLocaleDateString()}</div> ${lead.repName ? `<div class="info-item"><strong>Rep:</strong> ${lead.repName}</div>` : ''}</div><div class="quick-note-section"><div class="quick-note-form"><input type="text" id="quick-note-${lead.id}" placeholder="Add a quick note..." onkeypress="if(event.key==='Enter') addQuickNote(${lead.id})"><button class="btn" onclick="addQuickNote(${lead.id})">Add Note</button></div><div class="recent-notes" id="notes-${lead.id}">${recentNotes.length > 0 ? `${recentNotes.map(note => `<div class="mini-note"><div class="mini-note-date">${new Date(note.date).toLocaleString()}${note.repName ? ` - ${note.repName}` : ''}</div><div class="mini-note-text">${note.content}</div></div>`).join('')}${hasMoreNotes ? `<button class="toggle-notes" onclick="viewLead(${lead.id})">View all ${notes.length} notes →</button>` : ''}` : '<p style="color: #999; font-size: 13px; margin: 0;">No notes yet</p>'}</div></div><div class="lead-actions" style="margin-top: 15px;"><button class="btn" onclick="viewLead(${lead.id})">Full Details</button><button class="btn" onclick="openMeetingModal(${lead.id})">Schedule Meeting</button><button class="btn" onclick="emailLeadDirect(${lead.id})">📧 Email</button><button class="btn btn-danger" onclick="deleteLead(${lead.id})">Delete</button></div></div>`; const existingCard = document.getElementById(`lead-card-${lead.id}`); if (existingCard) { existingCard.outerHTML = cardHtml; } else { document.getElementById('leads-list').insertAdjacentHTML('beforeend', cardHtml); } }); }
-        function getNotes(leadId, callback) {
-            if (!db) return;
-            const transaction = db.transaction(['notes'], 'readonly');
-            const notesStore = transaction.objectStore('notes');
-            const notesIndex = notesStore.index('leadId');
-            const request = notesIndex.getAll(leadId);
-            request.onsuccess = (e) => {
-                const notes = e.target.result.sort((a, b) => new Date(b.date) - new Date(a.date));
-                callback(notes);
-            };
-            request.onerror = (e) => {
-                console.error(`Error getting notes for leadId ${leadId}:`, e);
-                callback([]); // Return empty array on error
             };
         }
-        function addQuickNote(leadId) { if (!db) return; const input = document.getElementById(`quick-note-${leadId}`); const content = input.value.trim(); if (!content) { alert('Please enter a note'); return; } const note = { leadId: leadId, content: content, date: new Date().toISOString(), repName: repName }; const transaction = db.transaction(['notes', 'leads'], 'readwrite'); transaction.objectStore('notes').add(note); transaction.objectStore('leads').get(leadId).onsuccess = (e) => { const lead = e.target.result; logActivity('Note Added', `Added note to ${lead.name}`); input.value = ''; createLeadCard(lead); }; transaction.oncomplete = () => loadDashboard(); }
-        function editField(leadId, fieldName, currentValue) { if (!db) return; const transaction = db.transaction(['leads'], 'readonly'); transaction.objectStore('leads').get(leadId).onsuccess = (e) => { const lead = e.target.result; const card = document.getElementById(`lead-card-${leadId}`); card.classList.add('editing'); const newValue = prompt(`Edit ${fieldName}:`, currentValue || ''); if (newValue !== null && newValue !== currentValue) { lead[fieldName] = newValue; const updateTransaction = db.transaction(['leads'], 'readwrite'); updateTransaction.objectStore('leads').put(lead); updateTransaction.oncomplete = () => { logActivity('Lead Updated', `Updated ${fieldName} for ${lead.name}`); card.classList.remove('editing'); createLeadCard(lead); }; } else { card.classList.remove('editing'); } }; }
-        function updateStatusInline(leadId, newStatus) { if (!db) return; const transaction = db.transaction(['leads'], 'readwrite'); const store = transaction.objectStore('leads'); store.get(leadId).onsuccess = (e) => { const lead = e.target.result; const oldStatus = lead.status; lead.status = newStatus; store.put(lead); logActivity('Status Updated', `${lead.name}: ${oldStatus} → ${newStatus}`); createLeadCard(lead); }; transaction.oncomplete = () => { loadDashboard(); }; }
-        function emailLeadDirect(leadId) { if (!db) return; const transaction = db.transaction(['leads'], 'readonly'); transaction.objectStore('leads').get(leadId).onsuccess = (e) => { const lead = e.target.result; const subject = encodeURIComponent(`Follow up - ${lead.name}`); const body = encodeURIComponent(`Hi ${lead.name.split(' ')[0]},\n\n`); window.location.href = `mailto:${lead.email}?subject=${subject}&body=${body}`; logActivity('Email Sent', `Opened email to ${lead.name}`); }; }
-        function viewLead(id) { if (!db) return; currentLeadId = id; const transaction = db.transaction(['leads', 'notes'], 'readonly'); const leadsStore = transaction.objectStore('leads'); const notesStore = transaction.objectStore('notes'); leadsStore.get(id).onsuccess = (e) => { const lead = e.target.result; document.getElementById('modal-lead-name').textContent = lead.name; document.getElementById('modal-lead-info').innerHTML = `<div class="lead-info">${lead.company ? `<div class="info-item"><strong>Company:</strong> ${lead.company}</div>` : ''} <div class="info-item"><strong>Email:</strong> ${lead.email}</div> ${lead.phone ? `<div class="info-item"><strong>Phone:</strong> ${lead.phone}</div>` : ''} <div class="info-item"><strong>Status:</strong> <span class="lead-status status-${lead.status}">${lead.status.toUpperCase()}</span></div> <div class="info-item"><strong>Added:</strong> ${new Date(lead.createdAt).toLocaleDateString()}</div> ${lead.repName ? `<div class="info-item"><strong>Rep:</strong> ${lead.repName}</div>` : ''}</div>`; }; const notesIndex = notesStore.index('leadId'); notesIndex.getAll(id).onsuccess = (e) => { const notes = e.target.result.sort((a, b) => new Date(b.date) - new Date(a.date)); document.getElementById('modal-notes-list').innerHTML = notes.length ? notes.map(note => `<div class="note-item"><div class="note-date">${new Date(note.date).toLocaleString()}${note.repName ? ` - ${note.repName}` : ''}</div><div class="note-content">${note.content}</div></div>`).join('') : '<p style="color: #666;">No notes yet.</p>'; }; document.getElementById('lead-modal').classList.add('active'); }
-        function addNote(e) { e.preventDefault(); if (!db) return; const content = document.getElementById('new-note').value; const note = { leadId: currentLeadId, content: content, date: new Date().toISOString(), repName: repName }; const transaction = db.transaction(['notes', 'leads'], 'readwrite'); transaction.objectStore('notes').add(note); transaction.objectStore('leads').get(currentLeadId).onsuccess = (e) => { const lead = e.target.result; logActivity('Note Added', `Added note to ${lead.name}`); }; transaction.oncomplete = () => { document.getElementById('new-note').value = ''; viewLead(currentLeadId); loadDashboard(); }; }
-        function updateStatus(id) { if (!db) return; const newStatus = prompt('Enter new status (new, contacted, qualified, won, lost):'); if (newStatus && ['new', 'contacted', 'qualified', 'won', 'lost'].includes(newStatus)) { const transaction = db.transaction(['leads'], 'readwrite'); const store = transaction.objectStore('leads'); store.get(id).onsuccess = (e) => { const lead = e.target.result; const oldStatus = lead.status; lead.status = newStatus; store.put(lead); logActivity('Status Updated', `${lead.name}: ${oldStatus} → ${newStatus}`); }; transaction.oncomplete = () => { loadLeads(); loadDashboard(); }; } }
-        function deleteLead(id) { if (confirm('Are you sure you want to delete this lead?')) { if (!db) return; const transaction = db.transaction(['leads'], 'readwrite'); const store = transaction.objectStore('leads'); store.get(id).onsuccess = (e) => { const lead = e.target.result; store.delete(id); logActivity('Lead Deleted', `Deleted lead: ${lead.name}`); }; transaction.oncomplete = () => { loadLeads(); loadDashboard(); }; } }
-        function changeMonth(delta) { currentMonth.setMonth(currentMonth.getMonth() + delta); loadCalendar(); }
-        function quickAddMeeting(dateStr) { if (!db) return; const transaction = db.transaction(['leads'], 'readonly'); const store = transaction.objectStore('leads'); const request = store.getAll(); request.onsuccess = () => { const leads = request.result; if (leads.length === 0) { alert('Please add some leads first before scheduling meetings!'); return; } const select = document.getElementById('meeting-lead'); select.innerHTML = leads.map(lead => `<option value="${lead.id}">${lead.name}</option>`).join(''); document.getElementById('meeting-date').value = dateStr; // Set the clicked date document.getElementById('meeting-time').value = new Date().toTimeString().slice(0, 5); // Default to current time document.getElementById('meeting-modal').classList.add('active'); }; }
-        function openMeetingModal(leadId = null) { if (!db) return; const transaction = db.transaction(['leads'], 'readonly'); const store = transaction.objectStore('leads'); const request = store.getAll(); request.onsuccess = () => { const leads = request.result; if (leads.length === 0) { alert('Please add some leads first before scheduling meetings!'); return; } const select = document.getElementById('meeting-lead'); select.innerHTML = leads.map(lead => `<option value="${lead.id}" ${leadId === lead.id ? 'selected' : ''}>${lead.name}</option>`).join(''); // Pre-select lead if provided document.getElementById('meeting-date').value = new Date().toISOString().slice(0,10); // Default to today document.getElementById('meeting-time').value = new Date().toTimeString().slice(0, 5); // Default to current time document.getElementById('meeting-modal').classList.add('active'); }; }
-        function viewMeeting(meetingId) { if (!db) return; const transaction = db.transaction(['meetings'], 'readonly'); transaction.objectStore('meetings').get(meetingId).onsuccess = (e) => { const meeting = e.target.result; if (meeting) { alert(`Meeting with ${meeting.leadName}\n\nDate: ${new Date(meeting.date).toLocaleDateString()}\nTime: ${meeting.time}\n\nNotes: ${meeting.notes || 'No notes'}`); } else { alert('Meeting details not found.'); } }; }
-        function saveMeeting(e) { e.preventDefault(); if (!db) return; const leadId = parseInt(document.getElementById('meeting-lead').value); const date = document.getElementById('meeting-date').value; const time = document.getElementById('meeting-time').value; const notes = document.getElementById('meeting-notes').value; const reminder = parseInt(document.getElementById('meeting-reminder').value); const leadsTransaction = db.transaction(['leads'], 'readonly'); leadsTransaction.objectStore('leads').get(leadId).onsuccess = (e) => { const lead = e.target.result; if (!lead) { alert('Selected lead not found. Please choose a valid lead.'); return; } const meeting = { leadId: leadId, leadName: lead.name, date: date, time: time, notes: notes, reminder: reminder, datetime: `${date}T${time}`, createdAt: new Date().toISOString(), repName: repName, notified: false }; const meetingTransaction = db.transaction(['meetings'], 'readwrite'); const addRequest = meetingTransaction.objectStore('meetings').add(meeting); addRequest.onsuccess = () => { logActivity('Meeting Scheduled', `Meeting with ${lead.name} on ${date} at ${time}`); document.getElementById('meeting-form').reset(); closeMeetingModal(); alert('Meeting scheduled successfully!'); loadCalendar(); loadDashboard(); }; addRequest.onerror = (e) => { console.error('Error saving meeting:', e); alert('Error scheduling meeting: ' + e.target.error.message); }; }; leadsTransaction.onerror = (e) => { console.error('Error fetching lead for meeting:', e); alert('Error fetching lead for meeting: ' + e.target.error.message); }; }
-        function closeModal() { document.getElementById('lead-modal').classList.remove('active'); currentLeadId = null; }
-        function closeMeetingModal() { document.getElementById('meeting-modal').classList.remove('active'); }
+
+        function closeModal() {
+            document.getElementById('lead-modal').classList.remove('active');
+            currentLeadId = null;
+        }
+
+        function closeMeetingModal() {
+            document.getElementById('meeting-modal').classList.remove('active');
+        }
         
-        document.addEventListener('DOMContentLoaded', () => {
-            init();
-
-            // Setup navigation click handler using event delegation
-            const nav = document.querySelector('.nav');
-            if (nav) {
-                nav.addEventListener('click', (event) => {
-                    const button = event.target.closest('.nav-btn');
-                    if (button && button.dataset.view) {
-                        showView(button.dataset.view);
-                    }
-                });
-            }
-        });
+        // Initialize
+        init();
     </script>
 </body>
 </html>
