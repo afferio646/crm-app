@@ -615,6 +615,7 @@
         let notifiedMeetings = JSON.parse(localStorage.getItem('notifiedMeetings')) || {};
         
         function initDB() {
+            console.log("initDB started");
             const request = indexedDB.open('CRMDB', 5); // Increment version to ensure upgradeNeeded triggers
 
             request.onerror = (event) => {
@@ -666,6 +667,7 @@
         }
 
         function init() {
+            console.log("DOM fully loaded and parsed");
             updateRepNameDisplay();
             initDB(); // This now correctly triggers the database connection
             setupDragDrop();
@@ -935,8 +937,9 @@
             
             const transaction = db.transaction(['meetings'], 'readonly');
             const meetingsStore = transaction.objectStore('meetings');
+            const request = meetingsStore.getAll();
             
-            meetingsStore.getAll().onsuccess = (e) => {
+            request.onsuccess = (e) => {
                 const meetings = e.target.result;
                 const now = new Date();
                 let html = '';
@@ -1238,6 +1241,7 @@
         }
         function emailLead() { /* This is now handled by emailLeadDirect(id) */ }
         function showView(viewId) { 
+            console.log(`showView called for: ${viewId}`);
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             
@@ -1264,7 +1268,21 @@
         }
         function filterLeads() { const searchText = document.getElementById('search-input').value.toLowerCase(); const statusFilter = document.getElementById('status-filter').value; const transaction = db.transaction(['leads'], 'readonly'); const store = transaction.objectStore('leads'); const request = store.getAll(); request.onsuccess = () => { let leads = request.result; if (searchText) { leads = leads.filter(lead => lead.name.toLowerCase().includes(searchText) || (lead.company && lead.company.toLowerCase().includes(searchText)) || lead.email.toLowerCase().includes(searchText) ); } if (statusFilter) { leads = leads.filter(lead => lead.status === statusFilter); } const leadsContainer = document.getElementById('leads-list'); leadsContainer.innerHTML = ''; if (leads.length === 0) { leadsContainer.innerHTML = '<p style="text-align: center; color: #666;">No leads match your search.</p>'; } else { leads.forEach(lead => createLeadCard(lead)); } }; }
         function createLeadCard(lead) { getNotes(lead.id, (notes) => { const recentNotes = notes.slice(0, 3); const hasMoreNotes = notes.length > 3; const cardHtml = `<div class="lead-card" id="lead-card-${lead.id}"><div class="lead-header"><div><div class="lead-name editable-field" onclick="editField(${lead.id}, 'name', '${lead.name.replace(/'/g, "\\'")}')">${lead.name}</div></div><select class="inline-status-select status-${lead.status}" onchange="updateStatusInline(${lead.id}, this.value)"><option value="new" ${lead.status === 'new' ? 'selected' : ''}>NEW</option><option value="contacted" ${lead.status === 'contacted' ? 'selected' : ''}>CONTACTED</option><option value="qualified" ${lead.status === 'qualified' ? 'selected' : ''}>QUALIFIED</option><option value="won" ${lead.status === 'won' ? 'selected' : ''}>WON</option><option value="lost" ${lead.status === 'lost' ? 'selected' : ''}>LOST</option></select></div><div class="lead-info">${lead.company ? `<div class="info-item"><strong>Company:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'company', '${(lead.company || '').replace(/'/g, "\\'")}')">${lead.company}</span></div>` : `<div class="info-item"><strong>Company:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'company', '')" style="color: #999;">Click to add</span></div>`} <div class="info-item"><strong>Email:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'email', '${lead.email.replace(/'/g, "\\'")}')">${lead.email}</span></div> ${lead.phone ? `<div class="info-item"><strong>Phone:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'phone', '${lead.phone.replace(/'/g, "\\'")}')">${lead.phone}</span></div>` : `<div class="info-item"><strong>Phone:</strong> <span class="editable-field" onclick="editField(${lead.id}, 'phone', '')" style="color: #999;">Click to add</span></div>`} <div class="info-item"><strong>Added:</strong> ${new Date(lead.createdAt).toLocaleDateString()}</div> ${lead.repName ? `<div class="info-item"><strong>Rep:</strong> ${lead.repName}</div>` : ''}</div><div class="quick-note-section"><div class="quick-note-form"><input type="text" id="quick-note-${lead.id}" placeholder="Add a quick note..." onkeypress="if(event.key==='Enter') addQuickNote(${lead.id})"><button class="btn" onclick="addQuickNote(${lead.id})">Add Note</button></div><div class="recent-notes" id="notes-${lead.id}">${recentNotes.length > 0 ? `${recentNotes.map(note => `<div class="mini-note"><div class="mini-note-date">${new Date(note.date).toLocaleString()}${note.repName ? ` - ${note.repName}` : ''}</div><div class="mini-note-text">${note.content}</div></div>`).join('')}${hasMoreNotes ? `<button class="toggle-notes" onclick="viewLead(${lead.id})">View all ${notes.length} notes →</button>` : ''}` : '<p style="color: #999; font-size: 13px; margin: 0;">No notes yet</p>'}</div></div><div class="lead-actions" style="margin-top: 15px;"><button class="btn" onclick="viewLead(${lead.id})">Full Details</button><button class="btn" onclick="openMeetingModal(${lead.id})">Schedule Meeting</button><button class="btn" onclick="emailLeadDirect(${lead.id})">📧 Email</button><button class="btn btn-danger" onclick="deleteLead(${lead.id})">Delete</button></div></div>`; const existingCard = document.getElementById(`lead-card-${lead.id}`); if (existingCard) { existingCard.outerHTML = cardHtml; } else { document.getElementById('leads-list').insertAdjacentHTML('beforeend', cardHtml); } }); }
-        function getNotes(leadId, callback) { if (!db) return; const transaction = db.transaction(['notes'], 'readonly'); const notesStore = transaction.objectStore('notes'); const notesIndex = notesStore.index('leadId'); notesIndex.getAll(leadId).onsuccess = (e) => { const notes = e.target.result.sort((a, b) => new Date(b.date) - new Date(a.date)); callback(notes); }; }
+        function getNotes(leadId, callback) {
+            if (!db) return;
+            const transaction = db.transaction(['notes'], 'readonly');
+            const notesStore = transaction.objectStore('notes');
+            const notesIndex = notesStore.index('leadId');
+            const request = notesIndex.getAll(leadId);
+            request.onsuccess = (e) => {
+                const notes = e.target.result.sort((a, b) => new Date(b.date) - new Date(a.date));
+                callback(notes);
+            };
+            request.onerror = (e) => {
+                console.error(`Error getting notes for leadId ${leadId}:`, e);
+                callback([]); // Return empty array on error
+            };
+        }
         function addQuickNote(leadId) { if (!db) return; const input = document.getElementById(`quick-note-${leadId}`); const content = input.value.trim(); if (!content) { alert('Please enter a note'); return; } const note = { leadId: leadId, content: content, date: new Date().toISOString(), repName: repName }; const transaction = db.transaction(['notes', 'leads'], 'readwrite'); transaction.objectStore('notes').add(note); transaction.objectStore('leads').get(leadId).onsuccess = (e) => { const lead = e.target.result; logActivity('Note Added', `Added note to ${lead.name}`); input.value = ''; createLeadCard(lead); }; transaction.oncomplete = () => loadDashboard(); }
         function editField(leadId, fieldName, currentValue) { if (!db) return; const transaction = db.transaction(['leads'], 'readonly'); transaction.objectStore('leads').get(leadId).onsuccess = (e) => { const lead = e.target.result; const card = document.getElementById(`lead-card-${leadId}`); card.classList.add('editing'); const newValue = prompt(`Edit ${fieldName}:`, currentValue || ''); if (newValue !== null && newValue !== currentValue) { lead[fieldName] = newValue; const updateTransaction = db.transaction(['leads'], 'readwrite'); updateTransaction.objectStore('leads').put(lead); updateTransaction.oncomplete = () => { logActivity('Lead Updated', `Updated ${fieldName} for ${lead.name}`); card.classList.remove('editing'); createLeadCard(lead); }; } else { card.classList.remove('editing'); } }; }
         function updateStatusInline(leadId, newStatus) { if (!db) return; const transaction = db.transaction(['leads'], 'readwrite'); const store = transaction.objectStore('leads'); store.get(leadId).onsuccess = (e) => { const lead = e.target.result; const oldStatus = lead.status; lead.status = newStatus; store.put(lead); logActivity('Status Updated', `${lead.name}: ${oldStatus} → ${newStatus}`); createLeadCard(lead); }; transaction.oncomplete = () => { loadDashboard(); }; }
@@ -1282,7 +1300,7 @@
         function closeMeetingModal() { document.getElementById('meeting-modal').classList.remove('active'); }
         
         // Initialize
-        init();
+        document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
 </html>
